@@ -22,7 +22,6 @@ export class VoltsService {
       studentUID: null,
       studentId: null,
       reservedAt: null,
-      rentedAt: null,
     });
   }
 }

@@ -28,8 +28,16 @@ export class AuthController {
   @Post('init')
   async initUser(@Req() req: AuthRequest, @Body() body: any) {
     const { uid, email } = req.user;
-    // 1. Extract mobileNumber from body here
-    const { firstName = '', lastName = '', studentId = '', mobileNumber = '' } = body ?? {};
+    
+    // 1. Extract new fields from body
+    const { 
+      firstName = '', 
+      lastName = '', 
+      studentId = '', 
+      mobileNumber = '',
+      termsAccepted = false,
+      termsAcceptedAt = null
+    } = body ?? {};
 
     if (!studentId) {
       throw new BadRequestException('Student ID is required.');
@@ -70,8 +78,11 @@ export class AuthController {
         firstName: firstName || studentInfo?.firstName || '',
         lastName: lastName || studentInfo?.lastName || '',
         studentId,
-        mobileNumber, // 2. Save it here
+        mobileNumber,
         email,
+        // 2. Save terms info to Firestore
+        termsAccepted,
+        termsAcceptedAt,
         currentVolts: [],
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
@@ -89,7 +100,11 @@ export class AuthController {
       if (firstName) updatePayload.firstName = firstName;
       if (lastName) updatePayload.lastName = lastName;
       if (studentId) updatePayload.studentId = studentId;
-      if (mobileNumber) updatePayload.mobileNumber = mobileNumber; // 3. Update it here
+      if (mobileNumber) updatePayload.mobileNumber = mobileNumber;
+      
+      // Optional: Update terms info if provided during an update
+      if (termsAccepted !== undefined) updatePayload.termsAccepted = termsAccepted;
+      if (termsAcceptedAt) updatePayload.termsAcceptedAt = termsAcceptedAt;
 
       if (Object.keys(updatePayload).length > 0) {
         updatePayload.updatedAt = admin.firestore.FieldValue.serverTimestamp();

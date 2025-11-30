@@ -2,19 +2,121 @@ import { Injectable, BadRequestException, InternalServerErrorException } from '@
 import { firestore, bucket } from '../firebase/firebase.admin';
 import { v4 as uuidv4 } from 'uuid';
 import { Timestamp } from 'firebase-admin/firestore';
+import axios from 'axios';
 
 @Injectable()
 export class GcashService {
-  // ---------------- USER ----------------
-  async uploadReceipt(userUID: string, amount: number, file: Express.Multer.File) {
+  // ---------------- PAYMONGO (Online) ----------------
+  async createTopUp(userId: string, amount: number) {
+    try {
+      const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
+      if (!PAYMONGO_SECRET_KEY) throw new Error('PayMongo config missing');
+
+      // Create Checkout Session
+      const response = await axios.post(
+        'https://api.paymongo.com/v1/checkout_sessions',
+        {
+          data: {
+            attributes: {
+              line_items: [
+                {
+                  currency: 'PHP',
+                  amount: amount * 100, // Convert to centavos
+                  description: 'VoltVault Wallet Top-up',
+                  name: 'Wallet Credit',
+                  quantity: 1,
+                },
+              ],
+              payment_method_types: ['gcash', 'paymaya', 'card', 'grab_pay'],
+              send_email_receipt: false,
+              show_description: true,
+              show_line_items: true,
+              reference_number: `TOPUP-${userId}-${Date.now()}`,
+              success_url: 'https://voltvault.com/success', // Placeholder or Deep Link
+              cancel_url: 'https://voltvault.com/cancel',
+              description: 'Top-up transaction',
+              metadata: {
+                userId: userId, // CRITICAL: Used in Webhook to identify user
+                type: 'topup',
+              },
+            },
+          },
+        },
+        {
+          headers: {
+            Authorization: `Basic ${Buffer.from(PAYMONGO_SECRET_KEY + ':').toString('base64')}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+        },
+      );
+
+      const session = response.data.data;
+      return {
+        checkoutUrl: session.attributes.checkout_url,
+        sessionId: session.id,
+      };
+    } catch (err: any) {
+      console.error('PayMongo Error:', err.response?.data || err.message);
+      throw new InternalServerErrorException('Failed to initialize payment');
+    }
+  }
+
+  // ---------------- PAYMONGO WEBHOOK HANDLER ----------------
+  // Renamed to 'addBalance' to match WalletController's call
+  async addBalance(userId: string, amount: number, transactionId: string) {
+    console.log(`Processing PayMongo success for ${userId}: ₱${amount}`);
+    
+    const userRef = firestore.collection('users').doc(userId);
+    const balanceRef = userRef.collection('wallet').doc('balance');
+    
+    // Use the PayMongo Transaction ID (e.g. pay_...) as the Document ID
+    const txnRef = firestore.collection('transactions').doc(transactionId);
+
+    await firestore.runTransaction(async (t) => {
+      const balanceDoc = await t.get(balanceRef);
+      const currentBalance = balanceDoc.exists ? balanceDoc.data()?.currentBalance || 0 : 0;
+      
+      const newBalance = currentBalance + amount;
+
+      // 1. Update Wallet Balance
+      t.set(balanceRef, { currentBalance: newBalance, updatedAt: Timestamp.now() }, { merge: true });
+
+      // Create Transaction Record Data
+      const txnData = {
+        userId,
+        amount,
+        status: 'succeeded',
+        type: 'topup',
+        method: 'paymongo', // Identifier for online payments
+        createdAt: new Date(),
+        completedAt: new Date(),
+        referenceId: transactionId,
+        description: 'Online Wallet Top-up'
+      };
+
+      // 2. Save to Global Transactions
+      t.set(txnRef, txnData);
+
+      // 3. Save to User's Transactions Subcollection
+      t.set(userRef.collection('transactions').doc(transactionId), txnData);
+    });
+    
+    console.log(`Successfully added ₱${amount} to ${userId}`);
+  }
+
+  // ---------------- MANUAL UPLOAD (Existing) ----------------
+  async uploadReceipt(userUID: string, amount: number, file: Express.Multer.File, method?: string) {
     if (!file?.buffer) throw new BadRequestException('No receipt uploaded');
     if (!amount || amount <= 0) throw new BadRequestException('Invalid amount');
 
-    try {
-      const fileName = `gcash_receipts/${userUID}_${Date.now()}_${uuidv4()}.jpg`;
-      const fileRef = bucket.file(fileName);
+    // Clean method string
+    let cleanMethod = (method || 'gcash').toLowerCase();
+    cleanMethod = cleanMethod.replace(/-manual|_manual/g, ''); 
 
-      // ✅ Generate a download token
+    try {
+      const fileName = `${cleanMethod}_receipts/${userUID}_${Date.now()}_${uuidv4()}.jpg`;
+      const fileRef = bucket.file(fileName);
       const downloadToken = uuidv4();
 
       await fileRef.save(file.buffer, {
@@ -24,19 +126,19 @@ export class GcashService {
         },
       });
 
-      // ✅ Include the token in the URL
       const receiptURL = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(
         fileName,
       )}?alt=media&token=${downloadToken}`;
 
-      const transactionId = `gcash_${userUID}_${Date.now()}`;
+      const transactionId = `${cleanMethod}_${userUID}_${Date.now()}`;
+      
       const transaction = {
         userId: userUID,
         amount,
         status: 'pending',
         type: 'topup',
-        method: 'gcash-manual',
-        receiptURL: `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(fileName)}?alt=media&token=${downloadToken}`,
+        method: `${cleanMethod}_manual`, 
+        receiptURL,
         receiptPath: fileName,
         createdAt: new Date(),
         completedAt: null,
@@ -55,10 +157,9 @@ export class GcashService {
       return { transactionId, userUID, amount, receiptURL };
     } catch (err: any) {
       console.error('GcashService.uploadReceipt error:', err);
-      throw new InternalServerErrorException('Failed to upload GCash receipt');
+      throw new InternalServerErrorException('Failed to upload receipt');
     }
   }
-
 
   async getUserDoc(uid: string) {
     const doc = await firestore.collection('users').doc(uid).get();
@@ -70,7 +171,7 @@ export class GcashService {
     try {
       const snap = await firestore
         .collection('transactions')
-        .where('method', '==', 'gcash-manual')
+        .where('method', 'in', ['gcash_manual', 'maya_manual'])
         .where('status', '==', 'pending')
         .orderBy('createdAt', 'desc')
         .get();
@@ -137,5 +238,4 @@ export class GcashService {
 
     return { message: 'Transaction denied successfully' };
   }
-
 }
