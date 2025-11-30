@@ -92,12 +92,13 @@ export class GcashController {
   // ---------------- PAYMONGO INITIALIZE (Protected) ----------------
   @UseGuards(FirebaseAuthGuard)
   @Post('topup-online')
-  async topUpOnline(@Req() req: Request, @Body() body: { amount: number }) {
+  async topUpOnline(@Req() req: Request, @Body() body: { amount: number; redirectBaseUrl: string }) { // ⭐ Add redirectBaseUrl
     const { uid } = (req as any).user;
     if (!body.amount || body.amount < 100) {
         throw new BadRequestException("Minimum amount is 100");
     }
-    return this.gcashService.createTopUp(uid, body.amount);
+    // ⭐ Pass it to service
+    return this.gcashService.createTopUp(uid, body.amount, body.redirectBaseUrl);
   }
 
   // ---------------- MANUAL UPLOAD (Protected) ----------------

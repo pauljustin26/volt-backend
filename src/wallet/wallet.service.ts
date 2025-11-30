@@ -7,21 +7,34 @@ import axios from 'axios';
 @Injectable()
 export class GcashService {
   // ---------------- PAYMONGO (Online) ----------------
-  async createTopUp(userId: string, amount: number) {
+  async createTopUp(userId: string, amount: number, redirectBaseUrl: string) { 
     try {
       const PAYMONGO_SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
       if (!PAYMONGO_SECRET_KEY) throw new Error('PayMongo config missing');
 
-      // Create Checkout Session
+      // 1. Define Success/Cancel URLs dynamically
+      // If web (localhost:8081), this becomes http://localhost:8081/wallet/status...
+      // If mobile, we can use a deep link or the same logic if handled correctly
+      console.log("------------------------------------------------");
+      console.log("Incoming Redirect Base URL:", redirectBaseUrl);
+      
+      const successUrl = `${redirectBaseUrl}/wallet/status?status=succeeded&amount=${amount}&method=paymongo`;
+      const cancelUrl = `${redirectBaseUrl}/wallet/recharge?status=cancelled`;
+      
+      console.log("Generated Success URL:", successUrl);
+      console.log("Generated Cancel URL:", cancelUrl);
+      console.log("------------------------------------------------");
+
       const response = await axios.post(
         'https://api.paymongo.com/v1/checkout_sessions',
         {
           data: {
             attributes: {
+              // ... existing line items ...
               line_items: [
                 {
                   currency: 'PHP',
-                  amount: amount * 100, // Convert to centavos
+                  amount: amount * 100,
                   description: 'VoltVault Wallet Top-up',
                   name: 'Wallet Credit',
                   quantity: 1,
@@ -32,16 +45,20 @@ export class GcashService {
               show_description: true,
               show_line_items: true,
               reference_number: `TOPUP-${userId}-${Date.now()}`,
-              success_url: 'https://voltvault.com/success', // Placeholder or Deep Link
-              cancel_url: 'https://voltvault.com/cancel',
+              
+              // ⭐ USE THE DYNAMIC URLS
+              success_url: successUrl,
+              cancel_url: cancelUrl,
+              
               description: 'Top-up transaction',
               metadata: {
-                userId: userId, // CRITICAL: Used in Webhook to identify user
+                userId: userId,
                 type: 'topup',
               },
             },
           },
         },
+        // ... headers ...
         {
           headers: {
             Authorization: `Basic ${Buffer.from(PAYMONGO_SECRET_KEY + ':').toString('base64')}`,
@@ -50,14 +67,15 @@ export class GcashService {
           },
         },
       );
-
+      
+      // ... return response
       const session = response.data.data;
       return {
         checkoutUrl: session.attributes.checkout_url,
         sessionId: session.id,
       };
     } catch (err: any) {
-      console.error('PayMongo Error:', err.response?.data || err.message);
+      // ... error handling
       throw new InternalServerErrorException('Failed to initialize payment');
     }
   }
