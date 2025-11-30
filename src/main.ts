@@ -10,7 +10,7 @@ async function bootstrap() {
     origin: [
       'http://localhost:8081',              // Local Development
       'https://voltvault.com',              // Mobile App hardcoded URL
-      'https://your-project-name.vercel.app', // ⭐ REPLACE THIS with your actual Vercel URL
+      'https://voltvault-web.vercel.app', // ⭐ REPLACE THIS with your actual Vercel URL
       /\.vercel\.app$/                      // Allows all Vercel preview URLs (Regex)
     ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
