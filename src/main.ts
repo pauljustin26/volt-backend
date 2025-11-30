@@ -5,14 +5,19 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Enable CORS so your Vercel frontend can talk to this backend
+  // Enable CORS with specific origins
   app.enableCors({
-    origin: '*', // Allow all origins (Easiest for troubleshooting)
+    origin: [
+      'http://localhost:8081',              // Local Development
+      'https://voltvault.com',              // Mobile App hardcoded URL
+      'https://your-project-name.vercel.app', // ⭐ REPLACE THIS with your actual Vercel URL
+      /\.vercel\.app$/                      // Allows all Vercel preview URLs (Regex)
+    ],
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    credentials: true,
+    credentials: true, // This is fine ONLY if origin is NOT '*'
   });
 
-  // CRITICAL CHANGE: Use the PORT provided by Render, or fallback to 3000 for local
+  // Use the PORT provided by Render
   const port = process.env.PORT || 3000;
   await app.listen(port, '0.0.0.0');
   
