@@ -35,8 +35,8 @@ export class GcashService {
                 {
                   currency: 'PHP',
                   amount: amount * 100,
-                  description: 'VoltVault Wallet Top-up',
-                  name: 'Wallet Credit',
+                  description: 'Recharge Wallet',
+                  name: 'Wallet',
                   quantity: 1,
                 },
               ],
@@ -50,7 +50,7 @@ export class GcashService {
               success_url: successUrl,
               cancel_url: cancelUrl,
               
-              description: 'Top-up transaction',
+              description: 'transaction',
               metadata: {
                 userId: userId,
                 type: 'topup',
@@ -106,11 +106,11 @@ export class GcashService {
         amount,
         status: 'succeeded',
         type: 'topup',
-        method: 'paymongo', // Identifier for online payments
+        method: 'paymongo',
         createdAt: new Date(),
         completedAt: new Date(),
         referenceId: transactionId,
-        description: 'Online Wallet Top-up'
+        description: 'Recharge Wallet via PayMongo',
       };
 
       // 2. Save to Global Transactions

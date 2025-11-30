@@ -8,6 +8,7 @@ async function bootstrap() {
   // Enable CORS with specific origins
   app.enableCors({
     origin: [
+      'http://localhost:5173',              // Admin Dev Local
       'http://localhost:8081',              // Local Development
       'https://voltvault.com',              // Mobile App hardcoded URL
       'https://voltvault-web.vercel.app', // ⭐ REPLACE THIS with your actual Vercel URL
