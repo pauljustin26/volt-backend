@@ -14,7 +14,7 @@ import { AdminModule } from './admin/admin.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     
-    // --- UPDATED: Added Debug Logging to troubleshoot Render deployment ---
+    // --- UPDATED: Switched to Port 465 (SSL) to fix Connection Timeouts ---
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
@@ -33,12 +33,18 @@ import { AdminModule } from './admin/admin.module';
         return {
           transport: {
             host: 'smtp.gmail.com',
-            port: 587,
-            secure: false, // true for 465, false for other ports
+            port: 465, // Changed to 465 for better stability on cloud servers
+            secure: true, // true for 465, false for other ports
             auth: {
               user: emailUser,
               pass: emailPass,
             },
+            // Add connection settings to debug timeouts
+            logger: true,
+            debug: true,
+            connectionTimeout: 20000, // 20 seconds
+            greetingTimeout: 20000,
+            socketTimeout: 20000,
           },
           defaults: {
             from: `"VoltVault Support" <${emailUser}>`,
