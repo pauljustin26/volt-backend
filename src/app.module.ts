@@ -14,7 +14,7 @@ import { AdminModule } from './admin/admin.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     
-    // --- UPDATED: Switched to Port 465 (SSL) to fix Connection Timeouts ---
+    // --- UPDATED: Use 'service: gmail' shorthand to resolve connection issues ---
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
@@ -32,19 +32,19 @@ import { AdminModule } from './admin/admin.module';
 
         return {
           transport: {
-            host: 'smtp.gmail.com',
-            port: 465, // Changed to 465 for better stability on cloud servers
-            secure: true, // true for 465, false for other ports
+            // Using 'service: gmail' allows Nodemailer to set the correct
+            // host/port/secure/tls settings automatically.
+            service: 'gmail',
             auth: {
               user: emailUser,
               pass: emailPass,
             },
-            // Add connection settings to debug timeouts
+            // Keep connection alive to prevent handshake timeouts
+            pool: true,
+            maxConnections: 1,
+            // Debug settings
             logger: true,
             debug: true,
-            connectionTimeout: 20000, // 20 seconds
-            greetingTimeout: 20000,
-            socketTimeout: 20000,
           },
           defaults: {
             from: `"VoltVault Support" <${emailUser}>`,
