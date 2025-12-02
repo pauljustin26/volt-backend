@@ -1,5 +1,5 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config'; // Import ConfigService
+import { Module, Logger } from '@nestjs/common'; // Added Logger
+import { ConfigModule, ConfigService } from '@nestjs/config'; 
 import { MailerModule } from '@nestjs-modules/mailer';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -14,25 +14,37 @@ import { AdminModule } from './admin/admin.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     
-    // --- UPDATED: Use forRootAsync to ensure .env is loaded first ---
+    // --- UPDATED: Added Debug Logging to troubleshoot Render deployment ---
     MailerModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        transport: {
-          host: 'smtp.gmail.com',
-          port: 587,
-          secure: false, // true for 465, false for other ports
-          auth: {
-            user: configService.get<string>('EMAIL_USER'),
-            pass: configService.get<string>('EMAIL_PASS'),
+      useFactory: async (configService: ConfigService) => {
+        const logger = new Logger('MailerModule');
+        const emailUser = configService.get<string>('EMAIL_USER');
+        const emailPass = configService.get<string>('EMAIL_PASS');
+
+        // DEBUG: Print to Render logs (check these in your dashboard!)
+        if (!emailUser || !emailPass) {
+          logger.error('CRITICAL: EMAIL_USER or EMAIL_PASS is missing in Environment Variables!');
+        } else {
+          logger.log(`Mailer configured for user: ${emailUser}`);
+          logger.log(`Password is ${emailPass ? 'SET (Length: ' + emailPass.length + ')' : 'MISSING'}`);
+        }
+
+        return {
+          transport: {
+            host: 'smtp.gmail.com',
+            port: 587,
+            secure: false, // true for 465, false for other ports
+            auth: {
+              user: emailUser,
+              pass: emailPass,
+            },
           },
-        },
-        defaults: {
-          // CRITICAL FIX: Gmail blocks emails if the 'from' address doesn't match the logged-in user.
-          // We use the EMAIL_USER variable here to ensure they match.
-          from: `"VoltVault Support" <${configService.get<string>('EMAIL_USER')}>`,
-        },
-      }),
+          defaults: {
+            from: `"VoltVault Support" <${emailUser}>`,
+          },
+        };
+      },
       inject: [ConfigService],
     }),
     // -----------------------------------------------------------------
