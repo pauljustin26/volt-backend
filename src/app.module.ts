@@ -28,7 +28,9 @@ import { AdminModule } from './admin/admin.module';
           },
         },
         defaults: {
-          from: '"VoltVault Support" <noreply@voltvault.com>',
+          // CRITICAL FIX: Gmail blocks emails if the 'from' address doesn't match the logged-in user.
+          // We use the EMAIL_USER variable here to ensure they match.
+          from: `"VoltVault Support" <${configService.get<string>('EMAIL_USER')}>`,
         },
       }),
       inject: [ConfigService],
