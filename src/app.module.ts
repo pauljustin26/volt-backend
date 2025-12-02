@@ -1,4 +1,4 @@
-import { Module, Logger } from '@nestjs/common'; // Added Logger
+import { Module, Logger } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config'; 
 import { MailerModule } from '@nestjs-modules/mailer';
 import { AuthModule } from './auth/auth.module';
@@ -14,35 +14,35 @@ import { AdminModule } from './admin/admin.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     
-    // --- UPDATED: Use 'service: gmail' shorthand to resolve connection issues ---
+    // --- UPDATED: Configuration for BREVO ---
     MailerModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: async (configService: ConfigService) => {
         const logger = new Logger('MailerModule');
+        
         const emailUser = configService.get<string>('EMAIL_USER');
         const emailPass = configService.get<string>('EMAIL_PASS');
 
-        // DEBUG: Print to Render logs (check these in your dashboard!)
         if (!emailUser || !emailPass) {
-          logger.error('CRITICAL: EMAIL_USER or EMAIL_PASS is missing in Environment Variables!');
+          logger.error('CRITICAL: EMAIL_USER or EMAIL_PASS is missing!');
         } else {
-          logger.log(`Mailer configured for user: ${emailUser}`);
-          logger.log(`Password is ${emailPass ? 'SET (Length: ' + emailPass.length + ')' : 'MISSING'}`);
+          logger.log(`Mailer configured for Brevo.`);
+          logger.log(`Sending as: ${emailUser}`);
         }
 
         return {
           transport: {
-            // Using 'service: gmail' allows Nodemailer to set the correct
-            // host/port/secure/tls settings automatically.
-            service: 'gmail',
+            host: 'smtp-relay.brevo.com', // Brevo Host
+            port: 587, // Standard Brevo Port
+            secure: false, // Must be false for 587
             auth: {
               user: emailUser,
               pass: emailPass,
             },
-            // Keep connection alive to prevent handshake timeouts
-            pool: true,
-            maxConnections: 1,
-            // Debug settings
+            // Brevo specific settings to prevent timeouts
+            tls: {
+              ciphers: 'SSLv3',
+            },
             logger: true,
             debug: true,
           },
@@ -53,8 +53,7 @@ import { AdminModule } from './admin/admin.module';
       },
       inject: [ConfigService],
     }),
-    // -----------------------------------------------------------------
-
+    
     AuthModule,
     UsersModule,
     WalletModule,
