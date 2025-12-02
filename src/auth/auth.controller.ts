@@ -13,6 +13,7 @@ import { FirebaseAuthGuard } from './firebase-auth.guard';
 import { Request } from 'express';
 import admin, { firestore } from '../firebase/firebase.admin';
 import { StudentsService } from '../students/students.service';
+import { AuthService } from './auth.service';
 
 interface AuthRequest extends Request {
   user?: any;
@@ -21,7 +22,10 @@ interface AuthRequest extends Request {
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);
-  constructor(private readonly studentsService: StudentsService) {}
+  constructor(
+    private readonly studentsService: StudentsService,
+    private readonly authService: AuthService 
+  ) {}
 
   // ---------------- INIT USER (called after Firebase signup) ----------------
   @UseGuards(FirebaseAuthGuard)
@@ -80,7 +84,7 @@ export class AuthController {
         studentId,
         mobileNumber,
         email,
-        // 2. Save terms info to Firestore
+        role: 'user', 
         termsAccepted,
         termsAcceptedAt,
         currentVolts: [],
@@ -92,17 +96,17 @@ export class AuthController {
         currentBalance: 0,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-    } else {
-      // Merge updates if user already exists
-      this.logger.log(`User document already exists for UID=${uid}, merging updates`);
+      
+      // Send verification email on init
+      await this.authService.sendCustomVerificationEmail(email);
 
+    } else {
+      this.logger.log(`User document already exists for UID=${uid}, merging updates`);
       const updatePayload: Record<string, any> = {};
       if (firstName) updatePayload.firstName = firstName;
       if (lastName) updatePayload.lastName = lastName;
       if (studentId) updatePayload.studentId = studentId;
       if (mobileNumber) updatePayload.mobileNumber = mobileNumber;
-      
-      // Optional: Update terms info if provided during an update
       if (termsAccepted !== undefined) updatePayload.termsAccepted = termsAccepted;
       if (termsAcceptedAt) updatePayload.termsAcceptedAt = termsAcceptedAt;
 
@@ -112,7 +116,6 @@ export class AuthController {
       }
     }
 
-    // 🔹 3. Return user profile + wallet
     const freshUserDoc = await userRef.get();
     const walletDoc = await userRef.collection('wallet').doc('balance').get();
 
@@ -125,14 +128,14 @@ export class AuthController {
     };
   }
 
-  
-  // ---------------- CHECK STUDENT ID BEFORE SIGNUP ----------------
+  // ---------------- CHECK STUDENT ID ----------------
   @Post('check-student')
   async checkStudent(@Body() body: { studentId: string }) {
     const { studentId } = body;
+    if (!studentId) throw new BadRequestException('Student ID is required.');
 
-    if (!studentId) {
-      throw new BadRequestException('Student ID is required.');
+    if (!this.studentsService.isValidStudent(studentId)) {
+      throw new BadRequestException('Student ID not found in official records.');
     }
 
     const existingStudent = await firestore
@@ -152,7 +155,6 @@ export class AuthController {
   @Get('me')
   async getProfile(@Req() req: AuthRequest) {
     const { uid } = req.user;
-
     const userRef = firestore.collection('users').doc(uid);
     const userDoc = await userRef.get();
 
@@ -161,10 +163,27 @@ export class AuthController {
     }
 
     const walletDoc = await userRef.collection('wallet').doc('balance').get();
-
     return {
       ...userDoc.data(),
       wallet: walletDoc.exists ? walletDoc.data() : null,
     };
+  }
+
+  // ---------------- PASSWORD RESET ----------------
+  @Post('reset-password')
+  async resetPassword(@Body() body: { email: string }) {
+    if (!body.email) {
+      throw new BadRequestException('Email is required');
+    }
+    return this.authService.sendCustomPasswordReset(body.email);
+  }
+
+  // ---------------- RESEND VERIFICATION (NEW) ----------------
+  @Post('resend-verification')
+  async resendVerification(@Body() body: { email: string }) {
+    if (!body.email) {
+      throw new BadRequestException('Email is required');
+    }
+    return this.authService.sendCustomVerificationEmail(body.email);
   }
 }
