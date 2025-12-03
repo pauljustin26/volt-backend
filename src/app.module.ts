@@ -1,5 +1,5 @@
-import { Module, Logger } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config'; 
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -14,46 +14,27 @@ import { AdminModule } from './admin/admin.module';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     
-    // --- UPDATED: Configuration for BREVO ---
+    // app.module.ts
     MailerModule.forRootAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => {
-        const logger = new Logger('MailerModule');
-        
-        const emailUser = configService.get<string>('EMAIL_USER');
-        const emailPass = configService.get<string>('EMAIL_PASS');
-
-        if (!emailUser || !emailPass) {
-          logger.error('CRITICAL: EMAIL_USER or EMAIL_PASS is missing!');
-        } else {
-          logger.log(`Mailer configured for Brevo.`);
-          logger.log(`Sending as: ${emailUser}`);
-        }
-
-        return {
-          transport: {
-            host: 'smtp-relay.brevo.com', // Brevo Host
-            port: 587, // Standard Brevo Port
-            secure: false, // Must be false for 587
-            auth: {
-              user: emailUser,
-              pass: emailPass,
-            },
-            // Brevo specific settings to prevent timeouts
-            tls: {
-              ciphers: 'SSLv3',
-            },
-            logger: true,
-            debug: true,
+      useFactory: async (configService: ConfigService) => ({
+        transport: {
+          host: 'smtp.gmail.com',
+          port: 587,
+          secure: false,
+          auth: {
+            user: configService.get<string>('EMAIL_USER'),
+            pass: configService.get<string>('EMAIL_PASS'),
           },
-          defaults: {
-            from: `"VoltVault Support" <${emailUser}>`,
-          },
-        };
-      },
+        },
+        defaults: {
+          from: `"VoltVault Support" <${configService.get<string>('EMAIL_USER')}>`,
+        },
+      }),
       inject: [ConfigService],
     }),
-    
+    // -----------------------------------------------------------------
+
     AuthModule,
     UsersModule,
     WalletModule,
