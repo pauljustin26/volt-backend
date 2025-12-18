@@ -133,6 +133,9 @@ export class GcashService {
     cleanMethod = cleanMethod.replace(/-manual|_manual/g, ''); 
 
     try {
+      const userDoc = await firestore.collection('users').doc(userUID).get();
+      const userData = userDoc.exists ? userDoc.data() : {};
+      const studentId = userData?.studentId || 'Unknown';
       const fileName = `${cleanMethod}_receipts/${userUID}_${Date.now()}_${uuidv4()}.jpg`;
       const fileRef = bucket.file(fileName);
       const downloadToken = uuidv4();
@@ -152,6 +155,7 @@ export class GcashService {
       
       const transaction = {
         userId: userUID,
+        studentId: studentId,
         amount,
         status: 'pending',
         type: 'topup',
