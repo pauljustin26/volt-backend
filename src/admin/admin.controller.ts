@@ -7,85 +7,141 @@ import { firestore } from '../firebase/firebase.admin';
 @Controller('admin')
 export class AdminController {
   @Get('dashboard')
-async getDashboard(@Req() req: any) {
-  const { user } = req;
+  async getDashboard(@Req() req: any) {
+    const { user } = req;
 
-  if (!user.role || user.role !== 'admin') {
-    throw new ForbiddenException('Not authorized');
-  }
+    if (!user.role || user.role !== 'admin') {
+      throw new ForbiddenException('Not authorized');
+    }
 
-  try {
-    // 1. Users & Volts Stats (Keep as is)
-    const usersSnap = await firestore.collection('users').where('role', '==', 'user').get();
-    const totalUsers = usersSnap.size;
+    try {
+      // 1. Users Stats
+      const usersSnap = await firestore.collection('users').where('role', '==', 'user').get();
+      const totalUsers = usersSnap.size;
 
-    const voltsSnap = await firestore.collection('volts').get();
-    let activeRentals = 0;
-    let availableVolts = 0;
-    voltsSnap.forEach((doc) => {
-      const data = doc.data();
-      if (data.status === 'rented') activeRentals++;
-      if (data.status === 'available' || data.status === 'docked') availableVolts++;
-    });
-
-    // 2. Transactions & Revenue (FIXED)
-    const transactionsSnap = await firestore.collectionGroup('transactions').get();
-    
-    let totalRevenue = 0;
-    const revenueTimeline: Record<string, number> = {};
-    const rentalsTimeline: Record<string, number> = {};
-    
-    // ⭐ FIX: Add a Set to track processed IDs to prevent double counting
-    const processedTxnIds = new Set<string>();
-
-    transactionsSnap.forEach((doc) => {
-      // ⭐ FIX: Skip if we already processed this Transaction ID
-      if (processedTxnIds.has(doc.id)) return;
-      processedTxnIds.add(doc.id);
-
-      const data = doc.data();
-
-      // Revenue Calculation
-      const isSuccess = data.status === 'succeeded' || data.status === 'completed';
+      // 2. Volts Stats & Distribution
+      const voltsSnap = await firestore.collection('volts').get();
+      let activeRentals = 0;
+      let availableVolts = 0;
       
-      if (data.type === 'topup' && isSuccess) {
-        const amount = Number(data.amount) || 0;
-        totalRevenue += amount;
+      const voltStatusDistribution: Record<string, number> = {
+        available: 0,
+        rented: 0,
+        docked: 0,
+        maintenance: 0
+      };
 
-        const dateObj = data.completedAt?.toDate?.() || data.createdAt?.toDate?.();
-        if (dateObj) {
-           const dateKey = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-           revenueTimeline[dateKey] = (revenueTimeline[dateKey] || 0) + amount;
+      voltsSnap.forEach((doc) => {
+        const data = doc.data();
+        const status = data.status || 'unknown';
+        
+        if (status === 'rented') activeRentals++;
+        if (status === 'available' || status === 'docked') availableVolts++;
+
+        if (voltStatusDistribution[status] !== undefined) {
+          voltStatusDistribution[status]++;
+        } else {
+          voltStatusDistribution['maintenance']++; 
         }
-      }
+      });
 
-      // Rental Activity Count
-      if (data.type === 'rent') {
-        const dateObj = data.startTime?.toDate?.();
-        if (dateObj) {
-          const dateKey = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-          rentalsTimeline[dateKey] = (rentalsTimeline[dateKey] || 0) + 1;
+      // 3. Transactions Processing
+      const transactionsSnap = await firestore.collectionGroup('transactions').get();
+      
+      let totalRevenue = 0;
+      const revenueTimeline: Record<string, number> = {};
+      const rentalsTimeline: Record<string, number> = {};
+      
+      const transactionTypeStats: Record<string, number> = {
+        rent: 0,
+        return: 0,
+        topup: 0
+      };
+
+      const processedTxnIds = new Set<string>();
+
+      transactionsSnap.forEach((doc) => {
+        if (processedTxnIds.has(doc.id)) return;
+        processedTxnIds.add(doc.id);
+
+        const data = doc.data();
+        
+        // --- STEP A: ROBUST TYPE INFERENCE ---
+        // Your DB docs lack 'type', so we infer it from the fields present.
+        let type = data.type;
+
+        if (!type) {
+            if (data.startTime && data.endTime) type = 'return'; // Completed rental
+            else if (data.startTime && !data.endTime) type = 'rent'; // Active rental
+            else if (data.amount && !data.fee) type = 'topup'; // Topup
         }
-      }
-    });
 
-    return {
-      totalUsers,
-      activeRentals,
-      availableVolts,
-      totalRevenue,
-      revenueTimeline,
-      rentalsTimeline,
-    };
+        // --- STEP B: Aggregate Counts ---
+        if (type === 'rent') transactionTypeStats.rent++;
+        else if (type === 'return') transactionTypeStats.return++;
+        else if (type === 'topup') transactionTypeStats.topup++;
 
-  } catch (error) {
-    console.error("Dashboard Error:", error);
-    return {
-      totalUsers: 0, activeRentals: 0, availableVolts: 0, totalRevenue: 0,
-      revenueTimeline: {}, rentalsTimeline: {}
-    };
+        // --- STEP C: Revenue Calculation ---
+        const isSuccess = data.status === 'succeeded' || data.status === 'completed';
+        let txnAmount = 0;
+
+        if (isSuccess) {
+            if (type === 'topup') {
+                txnAmount = Number(data.amount) || 0;
+            } 
+            else if (type === 'rent') {
+                txnAmount = Number(data.fee) || 0;
+            } 
+            else if (type === 'return') {
+                // Calculate Total: Base Fee + Penalty
+                const fee = Number(data.fee) || 0;
+                const penalty = Number(data.penaltyFee) || 0;
+                txnAmount = fee + penalty;
+            }
+        }
+
+        // Add to Total & Revenue Timeline
+        if (txnAmount > 0) {
+          totalRevenue += txnAmount;
+
+          const dateObj = data.completedAt?.toDate?.() || data.createdAt?.toDate?.() || data.endTime?.toDate?.();
+          if (dateObj) {
+             const dateKey = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+             revenueTimeline[dateKey] = (revenueTimeline[dateKey] || 0) + txnAmount;
+          }
+        }
+
+        // --- STEP D: Rental Volume Timeline ---
+        // Count BOTH 'rent' and 'return' as a rental event occurring
+        if (type === 'rent' || type === 'return') {
+          // Use startTime to plot when the rental *started*
+          const dateObj = data.startTime?.toDate?.() || data.createdAt?.toDate?.();
+          if (dateObj) {
+            const dateKey = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            rentalsTimeline[dateKey] = (rentalsTimeline[dateKey] || 0) + 1;
+          }
+        }
+      });
+
+      return {
+        totalUsers,
+        activeRentals,
+        availableVolts,
+        totalRevenue,
+        revenueTimeline,
+        rentalsTimeline,
+        voltStatusDistribution,
+        transactionTypeStats
+      };
+
+    } catch (error) {
+      console.error("Dashboard Error:", error);
+      return {
+        totalUsers: 0, activeRentals: 0, availableVolts: 0, totalRevenue: 0,
+        revenueTimeline: {}, rentalsTimeline: {}, voltStatusDistribution: {}, transactionTypeStats: {}
+      };
+    }
   }
-}
 
   @Get('transactions')
   async getAllTransactions(@Req() req: any) {

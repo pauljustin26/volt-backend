@@ -118,6 +118,40 @@ export class GcashController {
   }
 
   // ---------------- ADMIN (Protected) ----------------
+@UseGuards(FirebaseAuthGuard)
+  @Get('manual-requests')
+  async getManualRequests(@Req() req: Request) {
+    const { user } = req as any;
+    
+    // 1. Security Check: Ensure user is Admin
+    if (user.role !== 'admin') {
+        throw new ForbiddenException('Admin access required');
+    }
+
+    try {
+        // 2. Fetch from Firestore using Admin SDK (Bypasses Rules)
+        const snapshot = await firestore.collection('transactions')
+            .where('method', 'in', ['gcash_manual', 'maya_manual'])
+            .orderBy('createdAt', 'desc')
+            .get();
+
+        const transactions = snapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+                id: doc.id,
+                ...data,
+                // Serialize timestamps for frontend
+                createdAt: data.createdAt?.toDate?.() || new Date() 
+            };
+        });
+
+        return transactions;
+    } catch (error) {
+        console.error("Fetch Manual Requests Error:", error);
+        throw new BadRequestException("Failed to load requests");
+    }
+  }
+
   @UseGuards(FirebaseAuthGuard)
   @Get('pending')
   async getPending(@Req() req: Request) {
