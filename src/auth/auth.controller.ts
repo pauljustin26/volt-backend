@@ -1,3 +1,5 @@
+// backend/src/auth/auth.controller.ts
+
 import {
   Body,
   Controller,
@@ -23,7 +25,7 @@ export class AuthController {
   private readonly logger = new Logger(AuthController.name);
   constructor(private readonly studentsService: StudentsService) {}
 
-  // ---------------- INIT USER (called after Firebase signup) ----------------
+  // ---------------- INIT USER (Fixed with Cleanup) ----------------
   @UseGuards(FirebaseAuthGuard)
   @Post('init')
   async initUser(@Req() req: AuthRequest, @Body() body: any) {
@@ -38,16 +40,49 @@ export class AuthController {
       termsAcceptedAt = null
     } = body ?? {};
 
+    // 0. Check if this is an existing user (Safety Check)
+    // We check this FIRST so we know if we should delete the account on error.
+    const userRef = firestore.collection('users').doc(uid);
+    const userDoc = await userRef.get();
+    const isNewUser = !userDoc.exists;
+
+  // --- Helper to Clean Up Auth if Validation Fails ---
+    const rejectRegistration = async (message: string) => {
+      if (isNewUser) {
+        this.logger.warn(`Registration failed for ${email}: ${message}. Deleting Auth user.`);
+        try {
+          await admin.auth().deleteUser(uid);
+        } catch (cleanupError: any) { // <--- FIX: Added ': any'
+          this.logger.error(`Failed to cleanup auth user ${uid}: ${cleanupError.message}`);
+        }
+      }
+      throw new BadRequestException(message);
+    };
+    // ---------------------------------------------------
+
     if (!studentId) {
+      // If they didn't provide an ID, we just block the request, 
+      // but we don't delete the account yet (give them a chance to retry).
       throw new BadRequestException('Student ID is required.');
     }
 
-    // 0. Double Check: Ensure valid student
-    if (!this.studentsService.isValidStudent(studentId)) {
-      throw new BadRequestException('Invalid student ID not found in list.');
+    // 1. Fetch official student records
+    const studentInfo = await this.studentsService.getStudentInfo(studentId);
+
+    // Check if ID exists in whitelist
+    if (!studentInfo) {
+      await rejectRegistration('Student ID not found in official records.');
     }
 
-    // 1. Ensure the student ID isn’t already used
+    // [SECURITY FIX] Check if the email matches
+    const officialEmail = studentInfo.email || '';
+    if (officialEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
+       await rejectRegistration(
+         `The email does not match the official records for Student ID.`
+       );
+    }
+
+    // 2. Ensure the student ID isn’t already used by ANOTHER account
     const existingStudent = await firestore
       .collection('users')
       .where('studentId', '==', studentId)
@@ -56,28 +91,21 @@ export class AuthController {
     if (!existingStudent.empty) {
       const conflictDoc = existingStudent.docs.find(doc => doc.id !== uid);
       if (conflictDoc) {
-        throw new BadRequestException(
-          `Student ID is already linked to another account.`
-        );
+        await rejectRegistration('Student ID is already linked to another account.');
       }
     }
 
-    // 2. Prepare user reference
-    const userRef = firestore.collection('users').doc(uid);
-    const userDoc = await userRef.get();
-
-    if (!userDoc.exists) {
+    // 3. Create the User Profile in Firestore
+    if (isNewUser) {
       this.logger.log(`Creating new user document for UID=${uid}`);
 
-      const studentInfo = this.studentsService.getStudentInfo(studentId);
-
       await userRef.set({
-        firstName: firstName || studentInfo?.firstName || '',
-        lastName: lastName || studentInfo?.lastName || '',
+        firstName: firstName || studentInfo.firstName || '',
+        lastName: lastName || studentInfo.lastName || '',
         studentId,
         mobileNumber,
         email,
-        role: 'user', // <--- FIX: AUTOMATICALLY ASSIGN ROLE HERE
+        role: 'user', 
         termsAccepted,
         termsAcceptedAt,
         currentVolts: [],
@@ -91,9 +119,8 @@ export class AuthController {
       });
       
     } else {
-      // Merge updates logic (omitted for brevity, keep your existing logic here)
-       this.logger.log(`User document exists, merging...`);
-       // ... existing update logic ...
+       this.logger.log(`User document exists, merging data...`);
+       // Logic for existing users (if any)
     }
 
     const freshUserDoc = await userRef.get();
@@ -108,21 +135,29 @@ export class AuthController {
     };
   }
 
-  // ---------------- CHECK STUDENT ID BEFORE SIGNUP ----------------
+  // ... (Keep the rest of your controller: checkStudent, getProfile, etc.) ...
   @Post('check-student')
-  async checkStudent(@Body() body: { studentId: string }) {
-    const { studentId } = body;
+  async checkStudent(@Body() body: { studentId: string; email?: string }) {
+    const { studentId, email } = body;
 
     if (!studentId) {
       throw new BadRequestException('Student ID is required.');
     }
 
-    // --- FIX: Check if ID is in the CSV List FIRST ---
-    if (!this.studentsService.isValidStudent(studentId)) {
+    const studentInfo = await this.studentsService.getStudentInfo(studentId);
+    if (!studentInfo) {
         throw new BadRequestException('Student ID not found in official records.');
     }
 
-    // Then check if it is already taken in Firestore
+    if (email) {
+        const officialEmail = studentInfo.email || '';
+        if (officialEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
+            throw new BadRequestException(
+                'This Student ID belongs to a different email address.'
+            );
+        }
+    }
+
     const existingStudent = await firestore
       .collection('users')
       .where('studentId', '==', studentId)
@@ -132,7 +167,7 @@ export class AuthController {
       throw new BadRequestException(`Student ID is already linked to another account.`);
     }
 
-    return { message: 'Student ID is valid and available.' };
+    return { message: 'Student ID is valid and matches email.' };
   }
 
   // ---------------- GET PROFILE ----------------
@@ -156,7 +191,7 @@ export class AuthController {
     };
   }
 
-  // ---------------- CHECK IF EMAIL EXISTS (For Password Reset) ----------------
+  // ---------------- CHECK IF EMAIL EXISTS ----------------
   @Post('check-email')
   async checkEmail(@Body() body: { email: string }) {
     const { email } = body;
@@ -165,12 +200,10 @@ export class AuthController {
       throw new BadRequestException('Email is required.');
     }
 
-    // Check Firestore for a user with this email
     const usersRef = firestore.collection('users');
     const snapshot = await usersRef.where('email', '==', email).limit(1).get();
 
     if (snapshot.empty) {
-      // Throw error if email is NOT found
       throw new BadRequestException('Email not found.');
     }
 

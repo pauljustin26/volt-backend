@@ -1,11 +1,28 @@
 // backend/src/admin/admin.controller.ts
-import { Controller, Get, Req, UseGuards, ForbiddenException } from '@nestjs/common';
+import { 
+  Controller, 
+  Get, 
+  Post, 
+  Req, 
+  UseGuards, 
+  UseInterceptors, 
+  UploadedFile, 
+  ForbiddenException, 
+  BadRequestException, 
+  Logger 
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
 import { firestore } from '../firebase/firebase.admin';
+// FIX: Use default import for csv-parser to avoid "not callable" error
+import csvParser from 'csv-parser'; 
+import { Readable } from 'stream';
 
 @UseGuards(FirebaseAuthGuard)
 @Controller('admin')
 export class AdminController {
+  private readonly logger = new Logger(AdminController.name);
+
   @Get('dashboard')
   async getDashboard(@Req() req: any) {
     const { user } = req;
@@ -67,13 +84,12 @@ export class AdminController {
         const data = doc.data();
         
         // --- STEP A: ROBUST TYPE INFERENCE ---
-        // Your DB docs lack 'type', so we infer it from the fields present.
         let type = data.type;
 
         if (!type) {
-            if (data.startTime && data.endTime) type = 'return'; // Completed rental
-            else if (data.startTime && !data.endTime) type = 'rent'; // Active rental
-            else if (data.amount && !data.fee) type = 'topup'; // Topup
+            if (data.startTime && data.endTime) type = 'return'; 
+            else if (data.startTime && !data.endTime) type = 'rent'; 
+            else if (data.amount && !data.fee) type = 'topup'; 
         }
 
         // --- STEP B: Aggregate Counts ---
@@ -93,7 +109,6 @@ export class AdminController {
                 txnAmount = Number(data.fee) || 0;
             } 
             else if (type === 'return') {
-                // Calculate Total: Base Fee + Penalty
                 const fee = Number(data.fee) || 0;
                 const penalty = Number(data.penaltyFee) || 0;
                 txnAmount = fee + penalty;
@@ -112,9 +127,7 @@ export class AdminController {
         }
 
         // --- STEP D: Rental Volume Timeline ---
-        // Count BOTH 'rent' and 'return' as a rental event occurring
         if (type === 'rent' || type === 'return') {
-          // Use startTime to plot when the rental *started*
           const dateObj = data.startTime?.toDate?.() || data.createdAt?.toDate?.();
           if (dateObj) {
             const dateKey = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -152,21 +165,14 @@ export class AdminController {
     }
 
     try {
-      // 1. Fetch ALL transactions (This gets duplicates from root & subcollections)
       const snapshot = await firestore.collectionGroup('transactions').get();
-
-      // 2. ⭐ DEDUPLICATE: Use a Map to store unique transactions by ID
       const uniqueTxns = new Map<string, any>();
-
-      // 3. Prepare for User/Student ID lookup
       const userIdsToFetch = new Set<string>();
 
       snapshot.docs.forEach(doc => {
-        // If we already have this ID, skip it (removes the duplicate)
         if (uniqueTxns.has(doc.id)) return;
-
         const data = doc.data();
-        uniqueTxns.set(doc.id, { ...data, id: doc.id, ref: doc.ref }); // Store data + ref
+        uniqueTxns.set(doc.id, { ...data, id: doc.id, ref: doc.ref }); 
 
         if (data.userId) userIdsToFetch.add(data.userId);
         if (!data.userId && doc.ref.parent.parent) {
@@ -174,7 +180,6 @@ export class AdminController {
         }
       });
 
-      // 4. Fetch User Profiles (Map UID -> Student ID)
       const userMap = new Map<string, string>();
       if (userIdsToFetch.size > 0) {
         const idsArray = Array.from(userIdsToFetch);
@@ -192,16 +197,12 @@ export class AdminController {
         });
       }
 
-      // 5. Build final list from our unique Map
       const transactions = Array.from(uniqueTxns.values()).map(data => {
-        
-        // Determine raw UID
         let rawUserId = data.userId;
         if (!rawUserId && data.ref.parent.parent) {
            rawUserId = data.ref.parent.parent.id;
         }
 
-        // Resolve Student ID
         let finalDisplayId = data.studentId; 
         if (!finalDisplayId && rawUserId && userMap.has(rawUserId)) {
           finalDisplayId = userMap.get(rawUserId);
@@ -214,7 +215,7 @@ export class AdminController {
 
         return {
           id: data.id,
-          reference: data.id, // Or data.referenceId if you have it
+          reference: data.id, 
           userId: finalDisplayId, 
           type: data.type || 'unknown',
           method: data.method,
@@ -225,7 +226,6 @@ export class AdminController {
         };
       });
 
-      // Sort: Newest first
       transactions.sort((a, b) => b.date.getTime() - a.date.getTime());
 
       return { transactions };
@@ -235,6 +235,7 @@ export class AdminController {
       return { transactions: [] };
     }
   }
+
   @Get('users')
   async getUsers(@Req() req: any) {
     const { user } = req;
@@ -244,15 +245,12 @@ export class AdminController {
     }
 
     try {
-      // Query only where role is 'user' (excludes 'admin')
       const snapshot = await firestore.collection('users')
         .where('role', '==', 'user')
         .get();
 
       const users = snapshot.docs.map(doc => {
         const data = doc.data();
-        
-        // Handle timestamps safely
         const joinedDate = data.createdAt?.toDate?.() || new Date();
 
         return {
@@ -262,13 +260,12 @@ export class AdminController {
           lastName: data.lastName || '',
           email: data.email || '',
           mobileNumber: data.mobileNumber || 'N/A',
-          currentVolts: data.currentVolts || 0, // Assuming you track credits/volts
-          isActive: !data.isBanned, // Example status flag
+          currentVolts: data.currentVolts || 0, 
+          isActive: !data.isBanned, 
           joinedAt: joinedDate,
         };
       });
 
-      // Sort alphabetically by Name
       users.sort((a, b) => a.firstName.localeCompare(b.firstName));
 
       return { users };
@@ -278,6 +275,7 @@ export class AdminController {
       return { users: [] };
     }
   }
+
   @Get('volts')
   async getVolts(@Req() req: any) {
     const { user } = req;
@@ -291,26 +289,22 @@ export class AdminController {
 
       const volts = snapshot.docs.map(doc => {
         const data = doc.data();
-        
-        // Determine logical status
         let status = data.status || 'unknown';
         
-        // If it has a student assigned, override status to 'rented' if not already set
         if (data.studentId && data.studentId !== 'null') {
              status = 'rented';
         }
 
         return {
-          id: doc.id, // e.g. "01", "02"
+          id: doc.id,
           battery: data.battery ?? 0,
           status: status,
           sensorStatus: data.sensorStatus || 'N/A',
-          currentRenterId: data.studentId || null, // Shows who has it
+          currentRenterId: data.studentId || null,
           updatedAt: data.updatedAt?.toDate?.() || null,
         };
       });
 
-      // Sort by ID (01, 02, 03...)
       volts.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
       return { volts };
@@ -318,6 +312,112 @@ export class AdminController {
     } catch (error) {
       console.error("Fetch Volts Error:", error);
       return { volts: [] };
+    }
+  }
+
+  // ---------------- UPLOAD STUDENT CSV ----------------
+  @Post('upload-students')
+  @UseInterceptors(FileInterceptor('file')) 
+  async uploadStudentList(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
+    const { user } = req;
+    
+    if (user.role !== 'admin') {
+      throw new ForbiddenException('Only admins can update the student list.');
+    }
+
+    if (!file) {
+      throw new BadRequestException('No CSV file uploaded.');
+    }
+
+    // FIX: Explicitly type 'students' array as any[]
+    const students: any[] = [];
+    const stream = Readable.from(file.buffer.toString());
+
+    await new Promise((resolve, reject) => {
+      stream
+        .pipe(csvParser())
+        .on('data', (row: any) => { // FIX: Explicitly type 'row' as any
+          
+          // FIX: Explicitly type 'cleanRow' to allow indexing
+          const cleanRow: any = {};
+          
+          Object.keys(row).forEach(key => {
+            cleanRow[key.trim()] = row[key].trim();
+          });
+
+          if (cleanRow['studentId']) {
+            students.push(cleanRow);
+          }
+        })
+        .on('end', resolve)
+        .on('error', reject);
+    });
+
+    if (students.length === 0) {
+      return { message: 'CSV was empty or had no valid studentId column.' };
+    }
+
+    const batchSize = 500;
+    let batch = firestore.batch();
+    let count = 0;
+    let totalAdded = 0;
+
+    for (const student of students) {
+      const docRef = firestore.collection('student_whitelist').doc(student.studentId);
+      
+      batch.set(docRef, {
+        studentId: student.studentId,
+        firstName: student.firstName || '',
+        lastName: student.lastName || '',
+        email: student.email || '', // <--- ADD THIS LINE
+        updatedAt: new Date()
+      });
+
+      count++;
+      totalAdded++;
+
+      if (count === batchSize) {
+        await batch.commit();
+        batch = firestore.batch();
+        count = 0;
+      }
+    }
+
+    if (count > 0) {
+      await batch.commit();
+    }
+
+    this.logger.log(`Admin ${user.uid} uploaded ${totalAdded} students to whitelist.`);
+
+    return { 
+      message: `Successfully processed ${totalAdded} students into the whitelist.`,
+      count: totalAdded
+    };
+  }
+
+  // ---------------- GET WHITELIST (For the Modal) ----------------
+  @Get('whitelist')
+  async getWhitelist(@Req() req: any) {
+    const { user } = req;
+    if (user.role !== 'admin') throw new ForbiddenException('Not authorized');
+
+    try {
+      // Fetch all docs from student_whitelist
+      // NOTE: If you have >10,000 students, you should implement pagination here.
+      const snapshot = await firestore.collection('student_whitelist').get();
+      
+      const students = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+
+      // Sort by lastName alphabetically
+      students.sort((a: any, b: any) => (a.lastName || '').localeCompare(b.lastName || ''));
+
+      return { students };
+    } catch (error) {
+      this.logger.error("Error fetching whitelist", error);
+      return { students: [] };
     }
   }
 }

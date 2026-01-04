@@ -1,32 +1,32 @@
-import { Injectable } from '@nestjs/common';
-import * as fs from 'fs';
-import csv from 'csv-parser';
-
+// backend/src/students/students.service.ts
+import { Injectable, Logger } from '@nestjs/common';
+import { firestore } from '../firebase/firebase.admin';
 
 @Injectable()
 export class StudentsService {
-  private students = new Map<string, any>();
+  private readonly logger = new Logger(StudentsService.name);
 
-  constructor() {
-    this.loadStudents();
+  constructor() {}
+
+  // CHANGED: Now async, checks Firestore 'student_whitelist' collection
+  async isValidStudent(studentId: string): Promise<boolean> {
+    try {
+      const doc = await firestore.collection('student_whitelist').doc(studentId).get();
+      return doc.exists;
+    } catch (error: any) { // FIX: Added ': any' type assertion
+      this.logger.error(`Error checking student validity: ${error.message}`);
+      return false;
+    }
   }
 
-  private loadStudents() {
-    fs.createReadStream('src/data/students.csv')
-      .pipe(csv())
-      .on('data', (row) => {
-        this.students.set(row.studentId, row);
-      })
-      .on('end', () => {
-        console.log(`✅ Loaded ${this.students.size} student records`);
-      });
-  }
-
-  isValidStudent(studentId: string): boolean {
-    return this.students.has(studentId);
-  }
-
-  getStudentInfo(studentId: string) {
-    return this.students.get(studentId);
+  // CHANGED: Now async, fetches data from Firestore
+  async getStudentInfo(studentId: string): Promise<any> {
+    try {
+      const doc = await firestore.collection('student_whitelist').doc(studentId).get();
+      return doc.exists ? doc.data() : null;
+    } catch (error: any) { // FIX: Added ': any' type assertion
+      this.logger.error(`Error getting student info: ${error.message}`);
+      return null;
+    }
   }
 }
