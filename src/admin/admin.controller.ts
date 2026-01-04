@@ -17,6 +17,7 @@ import { firestore } from '../firebase/firebase.admin';
 // FIX: Use default import for csv-parser to avoid "not callable" error
 import csvParser from 'csv-parser'; 
 import { Readable } from 'stream';
+import { Param, Body, Patch } from '@nestjs/common';
 
 @UseGuards(FirebaseAuthGuard)
 @Controller('admin')
@@ -418,6 +419,53 @@ export class AdminController {
     } catch (error) {
       this.logger.error("Error fetching whitelist", error);
       return { students: [] };
+    }
+  }
+
+  // ---------------- BAN / UNBAN USER ----------------
+  @Patch('users/:uid/status')
+  async updateUserStatus(
+    @Param('uid') uid: string,
+    @Body() body: { action: 'ban' | 'unban'; reason?: string },
+    @Req() req: any,
+  ) {
+    const { user } = req;
+    if (user.role !== 'admin') {
+      throw new ForbiddenException('Not authorized');
+    }
+
+    const { action, reason } = body;
+
+    try {
+      const userRef = firestore.collection('users').doc(uid);
+      const userDoc = await userRef.get();
+
+      if (!userDoc.exists) {
+        throw new BadRequestException('User not found');
+      }
+
+      if (action === 'ban') {
+        await userRef.update({
+          isBanned: true,
+          banReason: reason || 'Violation of terms',
+          bannedAt: new Date(),
+          bannedBy: user.uid
+        });
+        this.logger.log(`User ${uid} was banned by admin ${user.uid} for: ${reason}`);
+      } else {
+        await userRef.update({
+          isBanned: false,
+          banReason: null,
+          bannedAt: null,
+          bannedBy: null
+        });
+        this.logger.log(`User ${uid} was unbanned by admin ${user.uid}`);
+      }
+
+      return { success: true, uid, action };
+    } catch (error) {
+      this.logger.error(`Failed to ${action} user ${uid}`, error);
+      throw new BadRequestException(`Failed to update user status`);
     }
   }
 }
