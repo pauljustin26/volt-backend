@@ -468,4 +468,37 @@ export class AdminController {
       throw new BadRequestException(`Failed to update user status`);
     }
   }
+
+  // ---------------- GET SYSTEM LOGS ----------------
+  @Get('logs')
+  async getLogs(@Req() req: any) {
+    const { user } = req;
+    if (user.role !== 'admin') throw new ForbiddenException('Not authorized');
+
+    try {
+      // Fetch logs, ordered by timestamp descending
+      const snapshot = await firestore.collection('admin_logs')
+        .orderBy('timestamp', 'desc')
+        .limit(100) // Limit to last 100 to prevent overload
+        .get();
+
+      const logs = snapshot.docs.map(doc => {
+        const data = doc.data();
+        return {
+          id: doc.id,
+          voltId: data.voltId,
+          level: data.level,
+          message: data.message,
+          details: data.details,
+          // Handle Firestore Timestamp vs Date
+          timestamp: data.timestamp?.toDate?.() || new Date()
+        };
+      });
+
+      return { logs };
+    } catch (error) {
+      this.logger.error("Error fetching system logs", error);
+      return { logs: [] };
+    }
+  }
 }
